@@ -1,0 +1,70 @@
+name: Send Currency Rate Summary
+
+on:
+  schedule:
+    # Every 30 minutes (the Vietcombank feed asks for at most 1 request per
+    # 5 minutes, so this is well within that). The weekly 7-day trend goes
+    # out with the Monday 00:xx (Vietnam time) run.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab to test
+
+permissions:
+  contents: write   # commit last_rates.json / rate_history.csv back to main
+
+concurrency:
+  group: send-currency-rate
+  cancel-in-progress: false
+
+jobs:
+  send-email:
+    runs-on: ubuntu-latest
+    env:
+      # Without the Gmail secrets, the Send step is skipped (with a warning)
+      # instead of failing the run every time.
+      HAS_GMAIL: ${{ secrets.GMAIL_ADDRESS != '' && secrets.GMAIL_APP_PASSWORD != '' }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate email
+        env:
+          # Optional settings: add them under Settings -> Secrets and
+          # variables -> Actions -> Variables to override the defaults.
+          WATCHLIST: ${{ vars.WATCHLIST }}
+          ALERT_THRESHOLD_PERCENT: ${{ vars.ALERT_THRESHOLD_PERCENT }}
+          DISCREPANCY_THRESHOLD_PERCENT: ${{ vars.DISCREPANCY_THRESHOLD_PERCENT }}
+          CONVERT_AMOUNTS_VND: ${{ vars.CONVERT_AMOUNTS_VND }}
+        run: python currency_rate_emailer.py generate
+
+      - name: Warn that the Gmail secrets are missing
+        if: env.HAS_GMAIL != 'true'
+        run: echo "::warning::GMAIL_ADDRESS / GMAIL_APP_PASSWORD secrets are not set, so no email was sent. Add them in Settings -> Secrets and variables -> Actions."
+
+      - name: Send email
+        if: env.HAS_GMAIL == 'true'
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          CURRENCY_RECIPIENT: ${{ secrets.CURRENCY_RECIPIENT }}
+        run: python currency_rate_emailer.py send
+
+      - name: Commit updated rates/history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for f in last_rates.json rate_history.csv; do
+            [ -f "$f" ] && git add "$f"
+          done
+          if ! git diff --cached --quiet; then
+            git commit -q -m "Update rate state [skip ci]"
+            git pull -q --rebase origin "$GITHUB_REF_NAME"
+            git push -q origin "HEAD:$GITHUB_REF_NAME"
+          fi

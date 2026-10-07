@@ -11,13 +11,25 @@ details.
 
 `email_preview.html` shows what the email looks like.
 
-## Status: partially restored
+## Setup
 
-Only `currency_rate_emailer.py` and `email_preview.html` survived. Still
-missing:
+1. Add these secrets under Settings -> Secrets and variables -> Actions:
+   - `GMAIL_ADDRESS`: your Gmail address
+   - `GMAIL_APP_PASSWORD`: a Gmail App Password (https://myaccount.google.com/apppasswords)
+   - `CURRENCY_RECIPIENT`: where to send the email
+2. Optional: add **Variables** (same page, Variables tab) to change the
+   defaults: `WATCHLIST`, `ALERT_THRESHOLD_PERCENT` (only email when a rate
+   moved at least this much; unset = every run), `DISCREPANCY_THRESHOLD_PERCENT`,
+   `CONVERT_AMOUNTS_VND`.
+3. Test it: Actions tab -> "Send Currency Rate Summary" -> Run workflow.
 
-- `.github/workflows/send-currency-rate.yml` (the scheduled GitHub Actions run)
-- `requirements.txt` (the script needs `requests`)
+It runs every 30 minutes (`.github/workflows/send-currency-rate.yml`) and
+commits `last_rates.json` and `rate_history.csv` back to the repo after each
+run; the history feeds the weekly trend sent with the Monday 00:xx run
+(Vietnam time).
+
+The workflow and `requirements.txt` were rebuilt after the original repo was
+lost; the script itself is the original.
 
 ## Running it locally
 
