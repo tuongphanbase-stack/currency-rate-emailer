@@ -77,8 +77,10 @@ def now_vn():
 
 
 DEFAULT_WATCHLIST = ["USD", "EUR", "JPY", "CNY", "KRW", "GBP", "SGD", "AUD", "CAD", "CHF", "HKD", "THB", "INR"]
-WATCHLIST = os.environ.get("WATCHLIST", ",".join(DEFAULT_WATCHLIST)).split(",")
-WATCHLIST = [c.strip() for c in WATCHLIST]
+# `or` instead of a get() default: the workflow passes unset repo variables
+# through as empty strings, which must fall back to the defaults too.
+WATCHLIST = (os.environ.get("WATCHLIST") or ",".join(DEFAULT_WATCHLIST)).split(",")
+WATCHLIST = [c.strip().upper() for c in WATCHLIST if c.strip()]
 
 # Currency symbols shown next to each code. Falls back to the code itself if unlisted.
 CURRENCY_SYMBOLS = {
@@ -263,10 +265,10 @@ HISTORY_FILE = "rate_history.csv"
 ALERT_THRESHOLD_PERCENT = os.environ.get("ALERT_THRESHOLD_PERCENT")
 ALERT_THRESHOLD_PERCENT = float(ALERT_THRESHOLD_PERCENT) if ALERT_THRESHOLD_PERCENT else None
 
-DISCREPANCY_THRESHOLD_PERCENT = float(os.environ.get("DISCREPANCY_THRESHOLD_PERCENT", "1.0"))
+DISCREPANCY_THRESHOLD_PERCENT = float(os.environ.get("DISCREPANCY_THRESHOLD_PERCENT") or "1.0")
 
 CONVERT_AMOUNTS_VND = [
-    float(a) for a in os.environ.get("CONVERT_AMOUNTS_VND", "1000000,5000000,10000000").split(",") if a.strip()
+    float(a) for a in (os.environ.get("CONVERT_AMOUNTS_VND") or "1000000,5000000,10000000").split(",") if a.strip()
 ]
 
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS")
