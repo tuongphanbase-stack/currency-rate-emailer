@@ -142,7 +142,12 @@ def label_for(code):
     sym = CURRENCY_SYMBOLS.get(code)
     return f"{code} {sym}" if sym else code
 
-MARKET_API_URL = "https://open.er-api.com/v6/latest/VND"  # base=VND -> we invert to VND-per-unit
+# The rate APIs below are asked for a USD base, not VND: 1 VND is worth so little
+# that VND-base rates are tiny numbers some APIs round to a few significant digits
+# (open.er-api.com sends USD as 0.000039), so inverting them left the rate stuck at
+# 1 / 0.000039 = 25,641 VND per USD. USD-base rates keep full precision, and VND
+# per 1 X is then rates["VND"] / rates["X"] (see vnd_per_unit).
+MARKET_API_URL = "https://open.er-api.com/v6/latest/USD"
 VCB_API_URL = "https://portal.vietcombank.com.vn/Usercontrols/TVPortal.TyGia/pXML.aspx"  # official VCB feed
 # This is Vietcombank's own documented public feed (linked from their exchange-rates page as
 # "if you need rates in XML format"). Their comment in the response asks for at most one
@@ -150,8 +155,8 @@ VCB_API_URL = "https://portal.vietcombank.com.vn/Usercontrols/TVPortal.TyGia/pXM
 
 # fawazahmed0/currency-api: free, no key, independent aggregator, mirrored on two CDNs
 # so a fallback is available if the primary CDN has a hiccup.
-FAWAZ_PRIMARY_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/vnd.json"
-FAWAZ_FALLBACK_URL = "https://latest.currency-api.pages.dev/v1/currencies/vnd.json"
+FAWAZ_PRIMARY_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
+FAWAZ_FALLBACK_URL = "https://latest.currency-api.pages.dev/v1/currencies/usd.json"
 
 # fxratesapi.com: free, no key needed for the latest-rates endpoint (per their docs/npm wrapper).
 FXRATES_API_URL = "https://api.fxratesapi.com/latest"
@@ -281,6 +286,24 @@ SMTP_PORT = 587
 
 # --- Fetch ----------------------------------------------------------------
 
+def vnd_per_unit(usd_to_x, key=lambda code: code):
+    """Turns USD-base rates ({"VND": 26283.5, "EUR": 0.8571, ...}) into
+    {currency_code: VND_per_unit} for the watchlist: VND per 1 X = VND per USD /
+    X per USD. `key` maps a currency code to the API's key (some APIs use
+    lowercase). USD itself is 1, in case the API leaves the base out.
+    """
+    vnd_per_usd = usd_to_x.get(key("VND"))
+    if not vnd_per_usd:
+        raise RuntimeError("VND not present in USD-base rates")
+
+    rates = {}
+    for code in WATCHLIST:
+        rate = 1.0 if code == "USD" else usd_to_x.get(key(code))
+        if rate:
+            rates[code] = vnd_per_usd / rate
+    return rates
+
+
 def fetch_market_rates():
     """Returns {currency_code: VND_per_unit} from the market mid-rate API."""
     resp = get_with_retry(MARKET_API_URL, headers=HEADERS, timeout=15)
@@ -289,13 +312,7 @@ def fetch_market_rates():
     if data.get("result") != "success":
         raise RuntimeError(f"Market API error: {data}")
 
-    vnd_to_x = data["rates"]  # base is VND, e.g. {"USD": 0.0000398, ...}
-    rates = {}
-    for code in WATCHLIST:
-        rate = vnd_to_x.get(code)
-        if rate:
-            rates[code] = 1 / rate  # invert -> VND per 1 unit of `code`
-    return rates
+    return vnd_per_unit(data["rates"])  # base is USD, e.g. {"VND": 26283.5, "EUR": 0.8571, ...}
 
 
 def fetch_vcb_rates():
@@ -328,37 +345,32 @@ def fetch_vcb_rates():
 
 
 def fetch_fawaz_rates():
-    """Returns {currency_code: VND_per_unit} from fawazahmed0/currency-api (base=VND).
+    """Returns {currency_code: VND_per_unit} from fawazahmed0/currency-api (base=USD).
     Tries the jsDelivr CDN first, falls back to the pages.dev mirror if that fails.
     """
-    vnd_to_x = None
+    usd_to_x = None
     last_error = None
     for url in (FAWAZ_PRIMARY_URL, FAWAZ_FALLBACK_URL):
         try:
             resp = get_with_retry(url, headers=HEADERS, timeout=15)
             data = resp.json()
-            vnd_to_x = data["vnd"]  # e.g. {"usd": 0.0000398, ...}
+            usd_to_x = data["usd"]  # e.g. {"vnd": 26283.5, "eur": 0.8571, ...}
             break
         except Exception as e:
             last_error = e
             continue
 
-    if vnd_to_x is None:
+    if usd_to_x is None:
         raise RuntimeError(f"Both fawazahmed0 endpoints failed: {last_error}")
 
-    rates = {}
-    for code in WATCHLIST:
-        rate = vnd_to_x.get(code.lower())
-        if rate:
-            rates[code] = 1 / rate  # invert -> VND per 1 unit of `code`
-    return rates
+    return vnd_per_unit(usd_to_x, key=str.lower)
 
 
 def fetch_fxrates_rates():
-    """Returns {currency_code: VND_per_unit} from fxratesapi.com (base=VND, no key needed)."""
+    """Returns {currency_code: VND_per_unit} from fxratesapi.com (base=USD, no key needed)."""
     params = {
-        "base": "VND",
-        "currencies": ",".join(WATCHLIST),
+        "base": "USD",
+        "currencies": ",".join(dict.fromkeys(WATCHLIST + ["VND"])),
         "format": "json",
     }
     resp = get_with_retry(FXRATES_API_URL, headers=HEADERS, params=params, timeout=15)
@@ -367,13 +379,7 @@ def fetch_fxrates_rates():
     if not data.get("success"):
         raise RuntimeError(f"fxratesapi.com error: {data}")
 
-    vnd_to_x = data["rates"]  # base is VND, e.g. {"USD": 0.0000398, ...}
-    rates = {}
-    for code in WATCHLIST:
-        rate = vnd_to_x.get(code)
-        if rate:
-            rates[code] = 1 / rate  # invert -> VND per 1 unit of `code`
-    return rates
+    return vnd_per_unit(data["rates"])  # base is USD, e.g. {"VND": 26283.5, "EUR": 0.8571, ...}
 
 
 def fetch_coingecko_rates():
